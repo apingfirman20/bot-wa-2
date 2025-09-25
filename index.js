@@ -143,6 +143,45 @@ async function startBot() {
       return
     }
 
+    // ================== UPDATE HARGA BUYBACK ==================
+async function updateGoldBuyback(sock, from) {
+  // Sheet1 = sheet utama, HargaBuyback = sheet data harga
+  const buybackRes = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: 'HargaBuyback!A:B'  // asumsi kolom A = Denominasi, B = Galeri 24
+  })
+
+  const rows = buybackRes.data.values || []
+  let harga = null
+
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i][0] === '1 Gr') {
+      harga = rows[i][1]
+      break
+    }
+  }
+
+  if (harga) {
+    // Masukkan harga ke H9 di Sheet1
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Sheet1!H9',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[harga]] }
+    })
+
+    // Kirim feedback ke WA
+    await sock.sendMessage(from, {
+      text: `✅ Harga buyback Galeri 24 (1gr) sudah diupdate: Rp${harga}`
+    })
+  } else {
+    await sock.sendMessage(from, {
+      text: `⚠️ Tidak ditemukan harga "1 Gr" di sheet HargaBuyback`
+    })
+  }
+}
+
+
     // ---- Update Saldo ----
     if (/update saldo/i.test(text)) {
       const saldo = await hitungSaldo()

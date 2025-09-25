@@ -53,18 +53,10 @@ async function tambahKeSheet(kategori, deskripsi, jumlah, tipe) {
 async function hitungSaldo() {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: 'Sheet1!A:E'
+    range: 'Sheet1!G4'
   })
-  const rows = res.data.values || []
-  let saldo = 0
-
-  for (let i = 1; i < rows.length; i++) {
-    const [,, , jml, tipe] = rows[i]
-    const num = cleanNumber(jml)
-    if (tipe === 'Pemasukan') saldo += num
-    else if (tipe === 'Pengeluaran') saldo -= num
-  }
-  return saldo
+  const values = res.data.values || []
+  return values[0] ? cleanNumber(values[0][0]) : 0
 }
 
 // Laporan mingguan/bulanan

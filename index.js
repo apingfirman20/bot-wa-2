@@ -8,8 +8,10 @@ import fs from 'fs'
 
 
 // ================= GOOGLE SHEETS =================
+const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)
+
 const auth = new google.auth.GoogleAuth({
-  keyFile: 'service_account.json',
+  credentials,
   scopes: ['https://www.googleapis.com/auth/spreadsheets']
 })
 const sheets = google.sheets({ version: 'v4', auth })

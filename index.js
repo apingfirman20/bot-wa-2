@@ -1,4 +1,4 @@
-import makeWASocket, { 
+import makeWASocket, {  
   useMultiFileAuthState,
   downloadMediaMessage
 } from '@whiskeysockets/baileys'
@@ -8,10 +8,8 @@ import fs from 'fs'
 
 
 // ================= GOOGLE SHEETS =================
-const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)
-
 const auth = new google.auth.GoogleAuth({
-  credentials,
+  keyFile: 'service_account.json',
   scopes: ['https://www.googleapis.com/auth/spreadsheets']
 })
 const sheets = google.sheets({ version: 'v4', auth })
@@ -22,6 +20,20 @@ function cleanNumber(str) {
   return parseInt(String(str).replace(/[^\d]/g, '')) || 0
 }
 
+// 🔹 Fungsi ringkas deskripsi dari OCR
+function ringkasDeskripsi(ocrText) {
+  const lower = ocrText.toLowerCase()
+  if (lower.includes('tokopedia') || lower.includes('shopee') || lower.includes('lazada'))
+    return 'Marketplace'
+  if (lower.includes('alfamart') || lower.includes('indomaret'))
+    return 'Belanja Minimarket'
+  if (lower.includes('gopay') || lower.includes('ovo') || lower.includes('dana'))
+    return 'Topup E-Wallet'
+  if (lower.includes('grab') || lower.includes('gojek'))
+    return 'Transportasi Online'
+  return ocrText.slice(0, 30) // default: potong 30 karakter biar singkat
+}
+
 // Tambah data ke sheet
 async function tambahKeSheet(kategori, deskripsi, jumlah, tipe) {
   const bersih = cleanNumber(jumlah)
@@ -30,7 +42,6 @@ async function tambahKeSheet(kategori, deskripsi, jumlah, tipe) {
     range: 'Sheet1!A:E',
     valueInputOption: 'USER_ENTERED',
     requestBody: {
-      // Simpan tanggal dalam format ISO (lebih stabil untuk parsing)
       values: [[new Date().toISOString(), kategori, deskripsi, bersih, tipe]]
     }
   })
@@ -86,7 +97,7 @@ async function laporanPeriode(mode = 'minggu') {
 }
 
 // ================= WHATSAPP BOT ===================
-let lastReport = { minggu: null, bulan: null }   // <<--- Tambahan flag anti-spam
+let lastReport = { minggu: null, bulan: null }
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info')
@@ -123,7 +134,6 @@ async function startBot() {
       let mode = /minggu/i.test(text) ? 'minggu' : 'bulan'
       const todayKey = new Date().toISOString().slice(0, 10)
 
-      // ✅ Cegah laporan ganda
       if (lastReport[mode] === todayKey) {
         await sock.sendMessage(from, { text: `ℹ️ Laporan ${mode} sudah dikirim hari ini.` })
         return
@@ -139,11 +149,9 @@ Pengeluaran: Rp${totalKeluar}
 Saldo akhir: Rp${saldo}`
       })
 
-      // Update flag biar nggak spam
       lastReport[mode] = todayKey
       return
     }
-
 
     // ---- Foto struk ----
     if (msg.message.imageMessage) {
@@ -162,7 +170,8 @@ Saldo akhir: Rp${saldo}`
         jumlah = angka.length ? angka[angka.length - 1][1] : '0'
       }
 
-      await tambahKeSheet('Belanja', ocrText.slice(0, 50), jumlah, 'Pengeluaran')
+      // 🔹 Gunakan ringkasDeskripsi
+      await tambahKeSheet('Belanja', ringkasDeskripsi(ocrText), jumlah, 'Pengeluaran')
       const saldo = await hitungSaldo()
       await sock.sendMessage(from, {
         text: `✅ Struk dibaca.\nTotal: Rp${cleanNumber(jumlah)}\nSaldo sekarang: Rp${saldo}`

@@ -33,6 +33,8 @@ function ringkasDeskripsi(ocrText) {
     return 'Topup E-Wallet'
   if (lower.includes('grab') || lower.includes('gojek'))
     return 'Transportasi Online'
+  if (lower.includes('gaji') || lower.includes('salary'))
+    return 'Gaji'
   return ocrText.slice(0, 30) // default: potong 30 karakter biar singkat
 }
 
@@ -54,6 +56,16 @@ async function hitungSaldo() {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: 'Sheet1!G4'
+  })
+  const values = res.data.values || []
+  return values[0] ? cleanNumber(values[0][0]) : 0
+}
+
+// Ambil nilai investasi dari G7
+async function hitungInvestasi() {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: 'Sheet1!G7'
   })
   const values = res.data.values || []
   return values[0] ? cleanNumber(values[0][0]) : 0
@@ -112,13 +124,32 @@ async function startBot() {
     // ---- Catat manual ----
     if (text?.startsWith('catat')) {
       const [_, jumlah, tipe, ...deskripsi] = text.split(' ')
-      const kategori = tipe
-      const jenis = tipe.toLowerCase().includes('masuk') ? 'Pemasukan' : 'Pengeluaran'
-      await tambahKeSheet(kategori, deskripsi.join(' '), jumlah, jenis)
+      let kategori = tipe
+      let jenis = 'Pengeluaran'
 
+      if (tipe.toLowerCase().includes('masuk')) {
+        jenis = 'Pemasukan'
+        kategori = 'Pemasukan'
+      } else if (tipe.toLowerCase().includes('invest')) {
+        jenis = 'Pengeluaran'
+        kategori = 'Investasi'
+      }
+
+      await tambahKeSheet(kategori, deskripsi.join(' '), jumlah, jenis)
       const saldo = await hitungSaldo()
       await sock.sendMessage(from, {
         text: `✅ Data tersimpan!\nSaldo terkini: Rp${saldo}`
+      })
+      return
+    }
+
+    // ---- Update Saldo ----
+    if (/update saldo/i.test(text)) {
+      const saldo = await hitungSaldo()
+      const investasi = await hitungInvestasi()
+
+      await sock.sendMessage(from, {
+        text: `🔄 Update Saldo:\nSaldo Terkini: Rp${saldo}\nNilai Investasi: Rp${investasi}`
       })
       return
     }
@@ -164,11 +195,18 @@ Saldo akhir: Rp${saldo}`
         jumlah = angka.length ? angka[angka.length - 1][1] : '0'
       }
 
-      // 🔹 Gunakan ringkasDeskripsi
-      await tambahKeSheet('Belanja', ringkasDeskripsi(ocrText), jumlah, 'Pengeluaran')
+      // 🔹 Deteksi apakah struk ini Gaji
+      let kategori = 'Belanja'
+      let tipe = 'Pengeluaran'
+      if (ocrText.toLowerCase().includes('gaji') || ocrText.toLowerCase().includes('salary')) {
+        kategori = 'Gaji'
+        tipe = 'Pemasukan'
+      }
+
+      await tambahKeSheet(kategori, ringkasDeskripsi(ocrText), jumlah, tipe)
       const saldo = await hitungSaldo()
       await sock.sendMessage(from, {
-        text: `✅ Struk dibaca.\nTotal: Rp${cleanNumber(jumlah)}\nSaldo sekarang: Rp${saldo}`
+        text: `✅ Struk dibaca.\nKategori: ${kategori}\nTotal: Rp${cleanNumber(jumlah)}\nSaldo sekarang: Rp${saldo}`
       })
     }
   })

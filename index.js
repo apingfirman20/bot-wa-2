@@ -1,11 +1,10 @@
-import makeWASocket, {  
+import makeWASocket, {
   useMultiFileAuthState,
   downloadMediaMessage
 } from '@whiskeysockets/baileys'
 import { google } from 'googleapis'
 import Tesseract from 'tesseract.js'
 import fs from 'fs'
-
 
 // ================= GOOGLE SHEETS =================
 const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)
@@ -17,12 +16,17 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth })
 const SPREADSHEET_ID = '1tms7gb0fWSkkO3vEKc-MJ4xlmgUhw3BxqXipO2JVj90'
 
-// Fungsi bersihkan angka
+// 🔹 Format angka biar lebih rapi
+function formatRupiah(num) {
+  return `Rp${num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`
+}
+
+// 🔹 Bersihkan angka string
 function cleanNumber(str) {
   return parseInt(String(str).replace(/[^\d]/g, '')) || 0
 }
 
-// 🔹 Fungsi ringkas deskripsi dari OCR
+// 🔹 Ringkas deskripsi dari OCR
 function ringkasDeskripsi(ocrText) {
   const lower = ocrText.toLowerCase()
   if (lower.includes('tokopedia') || lower.includes('shopee') || lower.includes('lazada'))
@@ -35,10 +39,10 @@ function ringkasDeskripsi(ocrText) {
     return 'Transportasi Online'
   if (lower.includes('gaji') || lower.includes('salary'))
     return 'Gaji'
-  return ocrText.slice(0, 30) // default: potong 30 karakter biar singkat
+  return ocrText.slice(0, 30)
 }
 
-// Tambah data ke sheet
+// 🔹 Tambah data ke sheet
 async function tambahKeSheet(kategori, deskripsi, jumlah, tipe) {
   const bersih = cleanNumber(jumlah)
   await sheets.spreadsheets.values.append({
@@ -51,27 +55,42 @@ async function tambahKeSheet(kategori, deskripsi, jumlah, tipe) {
   })
 }
 
-// Hitung saldo terkini
-async function hitungSaldo() {
+// 🔹 Cache untuk saldo & investasi
+let cacheSaldo = { value: null, time: 0 }
+let cacheInvestasi = { value: null, time: 0 }
+const CACHE_TTL = 30 * 1000 // 30 detik
+
+async function hitungSaldo(force = false) {
+  const now = Date.now()
+  if (!force && cacheSaldo.value && now - cacheSaldo.time < CACHE_TTL) {
+    return cacheSaldo.value
+  }
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: 'Sheet1!G4'
   })
   const values = res.data.values || []
-  return values[0] ? cleanNumber(values[0][0]) : 0
+  const saldo = values[0] ? cleanNumber(values[0][0]) : 0
+  cacheSaldo = { value: saldo, time: now }
+  return saldo
 }
 
-// Ambil nilai investasi dari G7
-async function hitungInvestasi() {
+async function hitungInvestasi(force = false) {
+  const now = Date.now()
+  if (!force && cacheInvestasi.value && now - cacheInvestasi.time < CACHE_TTL) {
+    return cacheInvestasi.value
+  }
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: 'Sheet1!G7'
   })
   const values = res.data.values || []
-  return values[0] ? cleanNumber(values[0][0]) : 0
+  const investasi = values[0] ? cleanNumber(values[0][0]) : 0
+  cacheInvestasi = { value: investasi, time: now }
+  return investasi
 }
 
-// Laporan mingguan/bulanan
+// 🔹 Laporan mingguan/bulanan
 async function laporanPeriode(mode = 'minggu') {
   const now = new Date()
   const res = await sheets.spreadsheets.values.get({
@@ -118,82 +137,70 @@ async function startBot() {
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0]
     if (!msg.message) return
+    if (msg.key.fromMe) return // ⛔ Jangan baca pesan bot sendiri
+
     const from = msg.key.remoteJid
     const text = msg.message.conversation || msg.message.extendedTextMessage?.text
 
-    // ---- Catat manual ----
+    // ================= HELP =================
+    if (/^help$/i.test(text)) {
+      await sock.sendMessage(from, {
+        text:
+`📌 *Panduan Penggunaan Bot Keuangan*
+1. *catat* [jumlah] [tipe] [deskripsi]
+   contoh: catat 50000 keluar makan siang
+   contoh: catat 200000 masuk gaji
+   contoh: catat 100000 invest emas
+
+2. *update saldo*
+   ➝ Menampilkan saldo & investasi terbaru
+
+3. *laporan minggu*
+   ➝ Rekap 7 hari terakhir
+
+4. *laporan bulan*
+   ➝ Rekap bulan ini
+
+5. Kirim foto struk
+   ➝ Bot akan membaca total otomatis`
+      })
+      return
+    }
+
+    // ================= CATAT MANUAL =================
     if (text?.startsWith('catat')) {
       const [_, jumlah, tipe, ...deskripsi] = text.split(' ')
       let kategori = tipe
       let jenis = 'Pengeluaran'
 
-      if (tipe.toLowerCase().includes('masuk')) {
+      if (tipe?.toLowerCase().includes('masuk')) {
         jenis = 'Pemasukan'
         kategori = 'Pemasukan'
-      } else if (tipe.toLowerCase().includes('invest')) {
+      } else if (tipe?.toLowerCase().includes('invest')) {
         jenis = 'Pengeluaran'
         kategori = 'Investasi'
       }
 
       await tambahKeSheet(kategori, deskripsi.join(' '), jumlah, jenis)
-      const saldo = await hitungSaldo()
+      const saldo = await hitungSaldo(true)
       await sock.sendMessage(from, {
-        text: `✅ Data tersimpan!\nSaldo terkini: Rp${saldo}`
+        text: `✅ Data tersimpan!\nSaldo terkini: ${formatRupiah(saldo)}`
       })
       return
     }
 
-    // ================== UPDATE HARGA BUYBACK ==================
-async function updateGoldBuyback(sock, from) {
-  // Sheet1 = sheet utama, HargaBuyback = sheet data harga
-  const buybackRes = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: 'HargaBuyback!A:B'  // asumsi kolom A = Denominasi, B = Galeri 24
-  })
-
-  const rows = buybackRes.data.values || []
-  let harga = null
-
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i][0] === '1 Gr') {
-      harga = rows[i][1]
-      break
-    }
-  }
-
-  if (harga) {
-    // Masukkan harga ke H9 di Sheet1
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Sheet1!H9',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [[harga]] }
-    })
-
-    // Kirim feedback ke WA
-    await sock.sendMessage(from, {
-      text: `✅ Harga buyback Galeri 24 (1gr) sudah diupdate: Rp${harga}`
-    })
-  } else {
-    await sock.sendMessage(from, {
-      text: `⚠️ Tidak ditemukan harga "1 Gr" di sheet HargaBuyback`
-    })
-  }
-}
-
-
-    // ---- Update Saldo ----
+    // ================= UPDATE SALDO =================
     if (/update saldo/i.test(text)) {
       const saldo = await hitungSaldo()
       const investasi = await hitungInvestasi()
 
       await sock.sendMessage(from, {
-        text: `🔄 Update Saldo:\nSaldo Terkini: Rp${saldo}\nNilai Investasi: Rp${investasi}`
+        text: `🔄 *Update Saldo:*\nSaldo Terkini: ${formatRupiah(saldo)}\nNilai Investasi: ${formatRupiah(investasi)}`
       })
       return
     }
 
-    // ---- Laporan ----
+    // ================= LAPORAN =================
     if (/laporan/i.test(text)) {
       let mode = /minggu/i.test(text) ? 'minggu' : 'bulan'
       const todayKey = new Date().toISOString().slice(0, 10)
@@ -207,17 +214,17 @@ async function updateGoldBuyback(sock, from) {
       const saldo = await hitungSaldo()
       await sock.sendMessage(from, {
         text:
-`📊 Laporan ${mode}
-Pemasukan: Rp${totalMasuk}
-Pengeluaran: Rp${totalKeluar}
-Saldo akhir: Rp${saldo}`
+`📊 *Laporan ${mode}*
+Pemasukan: ${formatRupiah(totalMasuk)}
+Pengeluaran: ${formatRupiah(totalKeluar)}
+Saldo akhir: ${formatRupiah(saldo)}`
       })
 
       lastReport[mode] = todayKey
       return
     }
 
-    // ---- Foto struk ----
+    // ================= FOTO STRUK =================
     if (msg.message.imageMessage) {
       const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: console })
       fs.writeFileSync('struk.jpg', buffer)
@@ -234,7 +241,6 @@ Saldo akhir: Rp${saldo}`
         jumlah = angka.length ? angka[angka.length - 1][1] : '0'
       }
 
-      // 🔹 Deteksi apakah struk ini Gaji
       let kategori = 'Belanja'
       let tipe = 'Pengeluaran'
       if (ocrText.toLowerCase().includes('gaji') || ocrText.toLowerCase().includes('salary')) {
@@ -243,9 +249,9 @@ Saldo akhir: Rp${saldo}`
       }
 
       await tambahKeSheet(kategori, ringkasDeskripsi(ocrText), jumlah, tipe)
-      const saldo = await hitungSaldo()
+      const saldo = await hitungSaldo(true)
       await sock.sendMessage(from, {
-        text: `✅ Struk dibaca.\nKategori: ${kategori}\nTotal: Rp${cleanNumber(jumlah)}\nSaldo sekarang: Rp${saldo}`
+        text: `✅ Struk dibaca.\nKategori: ${kategori}\nTotal: ${formatRupiah(cleanNumber(jumlah))}\nSaldo sekarang: ${formatRupiah(saldo)}`
       })
     }
   })

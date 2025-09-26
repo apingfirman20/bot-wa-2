@@ -6,17 +6,36 @@ import { google } from 'googleapis'
 import Tesseract from 'tesseract.js'
 import fs from 'fs'
 
+// ================= FIX LOGGING ISSUE =================
+// Simple logger replacement to avoid dependency issues
+const createSimpleLogger = (prefix) => ({
+  info: (msg) => console.log(`[${prefix}] ℹ️ ${msg}`),
+  error: (msg) => console.error(`[${prefix}] ❌ ${msg}`),
+  warn: (msg) => console.warn(`[${prefix}] ⚠️ ${msg}`),
+  debug: (msg) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[${prefix}] 🔍 ${msg}`)
+    }
+  },
+  // Dummy child method to prevent errors
+  child: () => createSimpleLogger(prefix)
+})
+
+// Global logger instance
+const logger = createSimpleLogger('BOT')
+
 // ================= CONFIGURASI & ANTI-SPAM =================
 const DEBUG = process.env.NODE_ENV !== 'production'
 const userCooldown = new Map()
-const COOLDOWN_TIME = 3000 // 3 detik cooldown per user
+const COOLDOWN_TIME = 3000
 
+// Fixed logging functions
 function logInfo(message) {
-  if (DEBUG) console.log(`💼 ${message}`)
+  logger.info(message)
 }
 
 function logError(message) {
-  console.error(`🚨 ${message}`)
+  logger.error(message)
 }
 
 // Anti-spam protection
@@ -25,44 +44,48 @@ function checkCooldown(userId) {
   const lastRequest = userCooldown.get(userId)
   
   if (lastRequest && (now - lastRequest) < COOLDOWN_TIME) {
-    return false // Masih cooldown
+    return false
   }
   
   userCooldown.set(userId, now)
-  return true // Bisa lanjut
+  return true
 }
 
-// Emoji helper untuk pesan lebih hidup
+// Emoji helper
 const emoji = {
-  money: '💰',
-  chart: '📊',
-  success: '✅',
-  error: '❌',
-  warning: '⚠️',
-  clock: '⏰',
-  receipt: '🧾',
-  bank: '🏦',
-  shopping: '🛍️',
-  transportation: '🚗',
-  salary: '💵',
-  investment: '📈'
+  money: '💰', chart: '📊', success: '✅', error: '❌', warning: '⚠️',
+  clock: '⏰', receipt: '🧾', bank: '🏦', shopping: '🛍️',
+  transportation: '🚗', salary: '💵', investment: '📈'
 }
 
-const tesseractLogger = DEBUG ? 
-  { logger: m => console.log(m) } : 
-  { logger: m => {} }
+// Fixed Tesseract logger
+const tesseractLogger = {
+  logger: m => {
+    if (DEBUG) {
+      console.log(`[TESSERACT] ${m.status || m}`)
+    }
+  }
+}
 
 // ================= GOOGLE SHEETS =================
-const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)
+const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || '{}')
+
+// Validate credentials
+if (!credentials.client_email || !credentials.private_key) {
+  logger.error('Google credentials tidak valid!')
+  process.exit(1)
+}
 
 const auth = new google.auth.GoogleAuth({
   credentials,
   scopes: ['https://www.googleapis.com/auth/spreadsheets']
 })
+
 const sheets = google.sheets({ version: 'v4', auth })
 const SPREADSHEET_ID = '1tms7gb0fWSkkO3vEKc-MJ4xlmgUhw3BxqXipO2JVj90'
 
 function cleanNumber(str) {
+  if (!str) return 0
   return parseInt(String(str).replace(/[^\d]/g, '')) || 0
 }
 
@@ -74,6 +97,8 @@ function formatRupiah(amount) {
 }
 
 function ringkasDeskripsi(ocrText) {
+  if (!ocrText) return 'Tidak terdeteksi'
+  
   const lower = ocrText.toLowerCase()
   const mappings = {
     'tokopedia|shopee|lazada': `${emoji.shopping} Marketplace`,
@@ -110,10 +135,9 @@ async function tambahKeSheet(kategori, deskripsi, jumlah, tipe) {
   }
 }
 
-// ================= FITUR BOT YANG LEBIH INTERAKTIF =================
+// ================= BOT IMPLEMENTATION =================
 let lastReport = { minggu: null, bulan: null }
 
-// Helper untuk pesan yang konsisten
 const messageTemplates = {
   welcome: () => 
     `👋 Halo! Saya asisten keuangan Anda. Berikut yang bisa saya bantu:\n\n` +
@@ -126,9 +150,7 @@ const messageTemplates = {
     `• "laporan minggu ini"\n` +
     `• "laporan bulan ini"\n\n` +
     `💰 *Cek Saldo:*\n` +
-    `• "saldo sekarang"\n\n` +
-    `💎 *Investasi Emas:*\n` +
-    `• "update harga emas"`,
+    `• "saldo sekarang"`,
 
   cooldown: (seconds) => 
     `${emoji.clock} Tunggu sebentar ya... Silakan coba lagi dalam ${seconds} detik`,
@@ -137,243 +159,258 @@ const messageTemplates = {
     `${emoji.success} *Transaksi Tercatat!*\n\n` +
     `📋 Kategori: ${category}\n` +
     `💳 Nominal: ${formatRupiah(amount)}\n` +
-    `💰 Saldo terkini: ${formatRupiah(balance)}\n\n` +
-    `Terima kasih sudah disiplin mencatat! ✨`,
+    `💰 Saldo terkini: ${formatRupiah(balance)}`,
 
   receiptProcessed: (amount, category, balance) =>
     `${emoji.receipt} *Struk Berhasil Diproses!*\n\n` +
     `🔍 Terdeteksi: ${category}\n` +
     `💰 Total: ${formatRupiah(amount)}\n` +
-    `🏦 Saldo: ${formatRupiah(balance)}\n\n` +
-    `Mantap! Receipt auto-scan berhasil! 🎯`,
+    `🏦 Saldo: ${formatRupiah(balance)}`,
 
   balanceInfo: (balance, investment) =>
     `${emoji.bank} *Info Keuangan Anda*\n\n` +
     `💵 Saldo Tunai: ${formatRupiah(balance)}\n` +
-    `📈 Nilai Investasi: ${formatRupiah(investation)}\n` +
-    `📊 Total Aset: ${formatRupiah(balance + investment)}\n\n` +
-    `Tetap bijak mengelola keuangan! 💪`,
+    `📈 Nilai Investasi: ${formatRupiah(investment)}\n` +
+    `📊 Total Aset: ${formatRupiah(balance + investment)}`,
 
   reportSummary: (period, income, expense, balance) =>
     `${emoji.chart} *Laporan ${period}*\n\n` +
     `⬆️ Pemasukan: ${formatRupiah(income)}\n` +
     `⬇️ Pengeluaran: ${formatRupiah(expense)}\n` +
     `📊 Saldo Bersih: ${formatRupiah(income - expense)}\n` +
-    `💎 Saldo Akhir: ${formatRupiah(balance)}\n\n` +
-    `${income > expense ? 'Hebat! Pengelolaan keuangan Anda baik! 🎉' : 'Ayo lebih hemat minggu depan! 💡'}`
+    `💎 Saldo Akhir: ${formatRupiah(balance)}`
 }
 
 async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info')
-  
-  const sock = makeWASocket({ 
-    auth: state,
-    logger: DEBUG ? undefined : { level: 'silent' }
-  })
-
-  sock.ev.on('creds.update', saveCreds)
-  
-  sock.ev.on('connection.update', ({ qr, connection }) => {
-    if (qr) {
-      console.log('🔐 *QR CODE UNTUK LOGIN*')
-      console.log('Scan kode berikut di WhatsApp Linked Devices:')
-      console.log(qr)
-    }
-    if (connection === 'open') {
-      logInfo('🤖 Bot keuangan siap melayani!')
-    }
-  })
-
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0]
-    if (!msg.message) return
+  try {
+    logInfo('Memulai bot WhatsApp...')
     
-    const from = msg.key.remoteJid
-    const user = from.split('@')[0]
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info')
+    
+    // Fixed Baileys configuration with safe logger
+    const sock = makeWASocket({ 
+      auth: state,
+      logger: DEBUG ? {
+        level: 'debug',
+        // Simple logger methods without .child()
+        debug: (msg) => console.log(`[BAILEYS] ${msg}`),
+        info: (msg) => console.log(`[BAILEYS] ${msg}`),
+        warn: (msg) => console.warn(`[BAILEYS] ${msg}`),
+        error: (msg) => console.error(`[BAILEYS] ${msg}`)
+      } : { level: 'silent' }
+    })
 
-    // Anti-spam check
-    if (!checkCooldown(user)) {
-      await sock.sendMessage(from, { 
-        text: messageTemplates.cooldown(COOLDOWN_TIME / 1000) 
-      })
-      return
-    }
-
-    logInfo(`Pesan dari ${user}: ${text.substring(0, 50)}`)
-
-    // === HELP & WELCOME ===
-    if (/^(halo|hi|help|menu|bot|start)/i.test(text)) {
-      await sock.sendMessage(from, { text: messageTemplates.welcome() })
-      return
-    }
-
-    // === CATAT MANUAL ===
-    if (text.startsWith('catat')) {
-      const parts = text.split(' ')
-      if (parts.length < 3) {
-        await sock.sendMessage(from, {
-          text: `${emoji.warning} Format salah! Contoh:\n"catat 50000 makan lunch kantin"`
-        })
-        return
+    sock.ev.on('creds.update', saveCreds)
+    
+    sock.ev.on('connection.update', ({ connection, qr }) => {
+      if (connection === 'open') {
+        logInfo('Bot berhasil terhubung ke WhatsApp!')
       }
-
-      const jumlah = parts[1]
-      const tipe = parts[2]
-      const deskripsi = parts.slice(3).join(' ') || 'Transaksi manual'
-
-      let kategori = tipe
-      let jenis = 'Pengeluaran'
-
-      if (/masuk|income|pemasukan/i.test(tipe)) {
-        jenis = 'Pemasukan'
-        kategori = 'Pemasukan'
-      } else if (/invest|emas|saham/i.test(tipe)) {
-        jenis = 'Pengeluaran'
-        kategori = 'Investasi'
+      if (qr) {
+        console.log('\n🔐 *QR CODE UNTUK LOGIN*')
+        console.log('Scan kode berikut di WhatsApp Linked Devices:')
+        console.log(qr + '\n')
       }
+    })
 
-      const success = await tambahKeSheet(kategori, deskripsi, jumlah, jenis)
-      
-      if (success) {
-        const saldo = await hitungSaldo()
-        await sock.sendMessage(from, {
-          text: messageTemplates.recordSuccess(cleanNumber(jumlah), kategori, saldo)
-        })
-      } else {
-        await sock.sendMessage(from, {
-          text: `${emoji.error} Gagal menyimpan data. Coba lagi nanti.`
-        })
-      }
-      return
-    }
-
-    // === UPDATE SALDO ===
-    if (/^(saldo|balance|cek saldo)/i.test(text)) {
-      const [saldo, investasi] = await Promise.all([
-        hitungSaldo(),
-        hitungInvestasi()
-      ])
-
-      await sock.sendMessage(from, {
-        text: messageTemplates.balanceInfo(saldo, investasi)
-      })
-      return
-    }
-
-    // === LAPORAN ===
-    if (/laporan/i.test(text)) {
-      const mode = /minggu|week|pekan/i.test(text) ? 'minggu' : 'bulan'
-      const periodText = mode === 'minggu' ? 'minggu ini' : 'bulan ini'
-      const todayKey = new Date().toISOString().slice(0, 10)
-
-      if (lastReport[mode] === todayKey) {
-        await sock.sendMessage(from, {
-          text: `${emoji.clock} Laporan ${periodText} sudah dilihat hari ini. Coba lagi besok!`
-        })
-        return
-      }
-
-      const [{ totalMasuk, totalKeluar }, saldo] = await Promise.all([
-        laporanPeriode(mode),
-        hitungSaldo()
-      ])
-
-      await sock.sendMessage(from, {
-        text: messageTemplates.reportSummary(periodText, totalMasuk, totalKeluar, saldo)
-      })
-
-      lastReport[mode] = todayKey
-      return
-    }
-
-    // === UPDATE HARGA EMAS ===
-    if (/^(harga emas|update emas|buyback)/i.test(text)) {
-      await updateGoldBuyback(sock, from)
-      return
-    }
-
-    // === SCAN STRUK OTOMATIS ===
-    if (msg.message.imageMessage) {
+    sock.ev.on('messages.upsert', async ({ messages }) => {
       try {
-        await sock.sendMessage(from, {
-          text: `${emoji.receipt} Sedang memindai struk Anda...`
-        })
-
-        const buffer = await downloadMediaMessage(msg, 'buffer', {})
-        const { data: { text: ocrText } } = await Tesseract.recognize(
-          buffer, 'eng+ind', tesseractLogger
-        )
-
-        logInfo(`OCR hasil: ${ocrText.substring(0, 100)}`)
-
-        // Improved amount detection
-        const amountPatterns = [
-          /(?:total|jumlah|amount)[\s:]*rp?\.?\s*([0-9.,]+)/i,
-          /rp?\.?\s*([0-9.,]+)(?:\s*(?:total|jumlah))/i,
-          /([0-9]{1,3}(?:[.,]\d{3})*(?:[.,]\d{2}))/g
-        ]
-
-        let amount = null
-        for (const pattern of amountPatterns) {
-          const match = ocrText.match(pattern)
-          if (match) {
-            amount = match[1] || match[0]
-            break
-          }
-        }
-
-        if (!amount) {
-          // Fallback: cari angka terbesar dalam teks
-          const numbers = ocrText.match(/(\d{1,3}([.,]\d{3})+)/g) || []
-          amount = numbers.length > 0 ? numbers[numbers.length - 1] : '0'
-        }
-
-        // Auto-category detection
-        let kategori = 'Belanja'
-        let tipe = 'Pengeluaran'
+        const msg = messages[0]
+        if (!msg.message) return
         
-        if (/gaji|salary|payroll/i.test(ocrText)) {
-          kategori = `${emoji.salary} Gaji`
-          tipe = 'Pemasukan'
-        } else if (/invest|emas|gold/i.test(ocrText)) {
-          kategori = `${emoji.investment} Investasi`
-        } else if (/transport|gojek|grab/i.test(ocrText)) {
-          kategori = `${emoji.transportation} Transportasi`
-        }
+        const from = msg.key.remoteJid
+        const user = from.split('@')[0]
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ''
 
-        const cleanAmount = cleanNumber(amount)
-        const success = await tambahKeSheet(kategori, ringkasDeskripsi(ocrText), cleanAmount, tipe)
-        
-        if (success) {
-          const saldo = await hitungSaldo()
-          await sock.sendMessage(from, {
-            text: messageTemplates.receiptProcessed(cleanAmount, kategori, saldo)
+        // Anti-spam check
+        if (!checkCooldown(user)) {
+          await sock.sendMessage(from, { 
+            text: messageTemplates.cooldown(COOLDOWN_TIME / 1000) 
           })
-        } else {
+          return
+        }
+
+        logInfo(`Pesan dari ${user}: ${text.substring(0, 50)}`)
+
+        // Help command
+        if (/^(halo|hi|help|menu|bot|start)/i.test(text)) {
+          await sock.sendMessage(from, { text: messageTemplates.welcome() })
+          return
+        }
+
+        // Catat manual
+        if (text.startsWith('catat')) {
+          const parts = text.split(' ')
+          if (parts.length < 3) {
+            await sock.sendMessage(from, {
+              text: `${emoji.warning} Format salah! Contoh:\n"catat 50000 makan lunch kantin"`
+            })
+            return
+          }
+
+          const jumlah = parts[1]
+          const tipe = parts[2]
+          const deskripsi = parts.slice(3).join(' ') || 'Transaksi manual'
+
+          let kategori = tipe
+          let jenis = 'Pengeluaran'
+
+          if (/masuk|income|pemasukan/i.test(tipe)) {
+            jenis = 'Pemasukan'
+            kategori = 'Pemasukan'
+          } else if (/invest|emas|saham/i.test(tipe)) {
+            jenis = 'Pengeluaran'
+            kategori = 'Investasi'
+          }
+
+          const success = await tambahKeSheet(kategori, deskripsi, jumlah, jenis)
+          
+          if (success) {
+            const saldo = await hitungSaldo()
+            await sock.sendMessage(from, {
+              text: messageTemplates.recordSuccess(cleanNumber(jumlah), kategori, saldo)
+            })
+          } else {
+            await sock.sendMessage(from, {
+              text: `${emoji.error} Gagal menyimpan data. Coba lagi nanti.`
+            })
+          }
+          return
+        }
+
+        // Cek saldo
+        if (/^(saldo|balance|cek saldo)/i.test(text)) {
+          const [saldo, investasi] = await Promise.all([
+            hitungSaldo(),
+            hitungInvestasi()
+          ])
+
           await sock.sendMessage(from, {
-            text: `${emoji.error} Gagal menyimpan struk. Silakan coba catat manual.`
+            text: messageTemplates.balanceInfo(saldo, investasi)
+          })
+          return
+        }
+
+        // Laporan
+        if (/laporan/i.test(text)) {
+          const mode = /minggu|week|pekan/i.test(text) ? 'minggu' : 'bulan'
+          const periodText = mode === 'minggu' ? 'minggu ini' : 'bulan ini'
+          const todayKey = new Date().toISOString().slice(0, 10)
+
+          if (lastReport[mode] === todayKey) {
+            await sock.sendMessage(from, {
+              text: `${emoji.clock} Laporan ${periodText} sudah dilihat hari ini. Coba lagi besok!`
+            })
+            return
+          }
+
+          const [{ totalMasuk, totalKeluar }, saldo] = await Promise.all([
+            laporanPeriode(mode),
+            hitungSaldo()
+          ])
+
+          await sock.sendMessage(from, {
+            text: messageTemplates.reportSummary(periodText, totalMasuk, totalKeluar, saldo)
+          })
+
+          lastReport[mode] = todayKey
+          return
+        }
+
+        // Scan struk
+        if (msg.message.imageMessage) {
+          await processReceiptImage(sock, from, msg)
+          return
+        }
+
+        // Unknown command
+        if (text.trim()) {
+          await sock.sendMessage(from, {
+            text: `🤔 Maaf, perintah tidak dikenali. Ketik "menu" untuk melihat panduan.`
           })
         }
 
       } catch (error) {
-        logError(`Error proses struk: ${error.message}`)
-        await sock.sendMessage(from, {
-          text: `${emoji.error} Maaf, struk tidak bisa diproses. Foto lebih jelas atau catat manual.`
-        })
+        logError(`Error processing message: ${error.message}`)
+      }
+    })
+
+    logInfo('Bot WhatsApp berhasil diinisialisasi!')
+
+  } catch (error) {
+    logError(`Startup error: ${error.message}`)
+    throw error
+  }
+}
+
+// Helper function untuk proses struk
+async function processReceiptImage(sock, from, msg) {
+  try {
+    await sock.sendMessage(from, {
+      text: `${emoji.receipt} Sedang memindai struk Anda...`
+    })
+
+    const buffer = await downloadMediaMessage(msg, 'buffer', {})
+    const { data: { text: ocrText } } = await Tesseract.recognize(
+      buffer, 'eng+ind', tesseractLogger
+    )
+
+    logInfo(`OCR hasil: ${ocrText.substring(0, 100)}`)
+
+    // Amount detection
+    const amountPatterns = [
+      /(?:total|jumlah|amount)[\s:]*rp?\.?\s*([0-9.,]+)/i,
+      /rp?\.?\s*([0-9.,]+)(?:\s*(?:total|jumlah))/i,
+    ]
+
+    let amount = '0'
+    for (const pattern of amountPatterns) {
+      const match = ocrText.match(pattern)
+      if (match) {
+        amount = match[1] || match[0]
+        break
       }
     }
 
-    // === UNKNOWN COMMAND ===
-    if (text.trim() && !msg.message.imageMessage) {
+    if (amount === '0') {
+      const numbers = ocrText.match(/(\d{1,3}([.,]\d{3})+)/g) || []
+      amount = numbers.length > 0 ? numbers[numbers.length - 1] : '0'
+    }
+
+    // Auto-category detection
+    let kategori = 'Belanja'
+    let tipe = 'Pengeluaran'
+    
+    if (/gaji|salary|payroll/i.test(ocrText)) {
+      kategori = `${emoji.salary} Gaji`
+      tipe = 'Pemasukan'
+    } else if (/invest|emas|gold/i.test(ocrText)) {
+      kategori = `${emoji.investment} Investasi`
+    }
+
+    const cleanAmount = cleanNumber(amount)
+    const success = await tambahKeSheet(kategori, ringkasDeskripsi(ocrText), cleanAmount, tipe)
+    
+    if (success) {
+      const saldo = await hitungSaldo()
       await sock.sendMessage(from, {
-        text: `🤔 Maaf, perintah tidak dikenali. Ketik "menu" untuk melihat panduan.`
+        text: messageTemplates.receiptProcessed(cleanAmount, kategori, saldo)
+      })
+    } else {
+      await sock.sendMessage(from, {
+        text: `${emoji.error} Gagal menyimpan struk. Silakan coba catat manual.`
       })
     }
-  })
+
+  } catch (error) {
+    logError(`Error proses struk: ${error.message}`)
+    await sock.sendMessage(from, {
+      text: `${emoji.error} Maaf, struk tidak bisa diproses. Coba foto lebih jelas atau catat manual.`
+    })
+  }
 }
 
-// ================= FUNGSI YANG DIBUTUHKAN =================
+// ================= SUPPORTING FUNCTIONS =================
 async function hitungSaldo() {
   try {
     const res = await sheets.spreadsheets.values.get({
@@ -439,42 +476,21 @@ async function laporanPeriode(mode = 'minggu') {
   }
 }
 
-async function updateGoldBuyback(sock, from) {
-  try {
-    const buybackRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'HargaBuyback!A:B'
-    })
+// ================= START BOT WITH ERROR HANDLING =================
+process.on('uncaughtException', (error) => {
+  logError(`Uncaught Exception: ${error.message}`)
+  process.exit(1)
+})
 
-    const rows = buybackRes.data.values || []
-    let harga = rows.find(row => row[0] === '1 Gr')?.[1]
+process.on('unhandledRejection', (reason, promise) => {
+  logError(`Unhandled Rejection at: ${promise}, reason: ${reason}`)
+  process.exit(1)
+})
 
-    if (harga) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'Sheet1!H9',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[harga]] }
-      })
-
-      await sock.sendMessage(from, {
-        text: `💎 *Harga Emas Diupdate!*\n\nHarga buyback Galeri 24 (1gr): ${formatRupiah(cleanNumber(harga))}\n\nInvestasi emas tetap menguntungkan! 🚀`
-      })
-    } else {
-      await sock.sendMessage(from, {
-        text: `${emoji.warning} Harga emas 1 gram tidak ditemukan di database.`
-      })
-    }
-  } catch (error) {
-    logError(`Error update emas: ${error.message}`)
-    await sock.sendMessage(from, {
-      text: `${emoji.error} Gagal update harga emas. Coba lagi nanti.`
-    })
-  }
-}
-
-// Start bot dengan error handling
-startBot().catch(error => {
-  logError(`Bot startup failed: ${error.message}`)
+// Start the bot
+startBot().then(() => {
+  logInfo('Bot berhasil dijalankan!')
+}).catch(error => {
+  logError(`Gagal memulai bot: ${error.message}`)
   process.exit(1)
 })

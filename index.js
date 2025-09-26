@@ -224,7 +224,7 @@ Saldo akhir: ${formatRupiah(saldo)}`
       return
     }
 
-   // ================= FOTO STRUK =================
+// ================= FOTO STRUK =================
 if (msg.message.imageMessage) {
   const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: console })
   fs.writeFileSync('struk.jpg', buffer)
@@ -233,7 +233,7 @@ if (msg.message.imageMessage) {
     await Tesseract.recognize(buffer, 'eng+ind', { logger: m => console.log(m) })
   console.log('Hasil OCR:', ocrText)
 
-  // Fungsi ambil total dari OCR
+  // 🔹 Fungsi ambil total dari OCR
   function ambilTotal(ocrText) {
     const baris = ocrText.split("\n")
 
@@ -249,40 +249,43 @@ if (msg.message.imageMessage) {
       }
     }
 
-
-  // fallback → cari angka terbesar
-  let angka = []
-  for (let b of baris) {
-    const match = b.match(/\d[\d.,]+/g)
-    if (match) {
-      match.forEach(m => {
-        angka.push(parseInt(m.replace(/[.,]/g, "")))
-      })
+    // fallback → cari angka terbesar
+    let angka = []
+    for (let b of baris) {
+      const match = b.match(/\d[\d.,]+/g)
+      if (match) {
+        match.forEach(m => {
+          angka.push(parseInt(m.replace(/[.,]/g, "")))
+        })
+      }
     }
+
+    if (angka.length) {
+      const max = Math.max(...angka)
+      return max.toString()
+    }
+
+    return "0"
   }
 
-  if (angka.length) {
-    const max = Math.max(...angka)
-    return max.toString()
+  // ✅ ambil jumlah dari OCR
+  let jumlah = ambilTotal(ocrText)
+
+  // 🔹 Deteksi kategori
+  let kategori = 'Belanja'
+  let tipe = 'Pengeluaran'
+  if (ocrText.toLowerCase().includes('gaji') || ocrText.toLowerCase().includes('salary')) {
+    kategori = 'Gaji'
+    tipe = 'Pemasukan'
   }
 
-  return "0"
+  await tambahKeSheet(kategori, ringkasDeskripsi(ocrText), jumlah, tipe)
+  const saldo = await hitungSaldo(true)
+  await sock.sendMessage(from, {
+    text: `✅ Struk dibaca.\nKategori: ${kategori}\nTotal: ${formatRupiah(cleanNumber(jumlah))}\nSaldo sekarang: ${formatRupiah(saldo)}`
+  })
 }
 
-
-      let kategori = 'Belanja'
-      let tipe = 'Pengeluaran'
-      if (ocrText.toLowerCase().includes('gaji') || ocrText.toLowerCase().includes('salary')) {
-        kategori = 'Gaji'
-        tipe = 'Pemasukan'
-      }
-
-      await tambahKeSheet(kategori, ringkasDeskripsi(ocrText), jumlah, tipe)
-      const saldo = await hitungSaldo(true)
-      await sock.sendMessage(from, {
-        text: `✅ Struk dibaca.\nKategori: ${kategori}\nTotal: ${formatRupiah(cleanNumber(jumlah))}\nSaldo sekarang: ${formatRupiah(saldo)}`
-      })
-    }
   })
 }
 
